@@ -11,4 +11,6 @@ You can
 - Set it to start on boot
 And also easily uninstall or quit the program. To start/install it again, simply open the .exe file. 
 
+![Taskbar Cat](docs/1.gif) ![Taskbar Cat](docs/2.png)
+
 Microsoft Defender will  warn you when you try to install it, and say that it is unsafe. This is because I haven't gotten a signed certificate for it yet. I assure you it's safe. If you still have doubts, you can take a look a the source code!
