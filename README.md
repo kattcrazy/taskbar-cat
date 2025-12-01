@@ -13,7 +13,7 @@ And also easily uninstall or quit the program. To start/install it again, simply
 <a href="https://kattcrazy.nz/taskbar-cat/" style="display: inline-block; padding: 10px 20px; background-color:#8360F8; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; transition: background-color 0.3s;">Download the .exe<a>
 
 
-Microsoft Defender will  warn you when you try to install it, and say that it is unsafe. This is because I haven't gotten a signed certificate for it yet. I assure you,it's safe! If you still have doubts, you can take a look a the source code!
+Microsoft Defender will  warn you when you try to install it, and say that it is unsafe. This is because I haven't gotten a signed certificate for it yet. I assure you, it's safe! If you still have doubts, you can take a look a the source code!
 
 ## Images
 
@@ -21,5 +21,6 @@ Microsoft Defender will  warn you when you try to install it, and say that it is
 
 ## Requirements
 Windows 11
+
 Taskbar NOT set to auto-hide
 
