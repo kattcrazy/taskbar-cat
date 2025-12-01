@@ -476,14 +476,17 @@ class TaskbarCatOverlay:
         # Create system tray icon
         self.tray_icon = QSystemTrayIcon(self.app)
         
-        # Use the left cat image as the tray icon (small version)
-        if "left_center" in self.pose_images:
-            tray_pixmap = self.pose_images["left_center"].scaled(
+        # Use icon.ico from images folder, scaled to system tray size (16x16)
+        icon_path = get_resource_path("images/icon.ico")
+        if os.path.exists(icon_path):
+            icon_pixmap = QPixmap(icon_path)
+            # Scale to 16x16 for system tray (standard size)
+            scaled_icon = icon_pixmap.scaled(
                 16, 16,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
-            self.tray_icon.setIcon(QIcon(tray_pixmap))
+            self.tray_icon.setIcon(QIcon(scaled_icon))
         else:
             # Fallback: create a simple icon
             self.tray_icon.setIcon(self.app.style().standardIcon(
