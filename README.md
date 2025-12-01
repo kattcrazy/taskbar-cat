@@ -8,6 +8,7 @@ You can
 - Change the size
 - Change the vertical and horizontal positions
 - Set it to start on boot
+
 And also easily uninstall or quit the program. To start/install it again, simply open the .exe file.
 
 <a href="https://kattcrazy.nz/taskbar-cat/" style="display: inline-block; padding: 10px 20px; background-color:#8360F8; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; transition: background-color 0.3s;">Download the .exe<a>
