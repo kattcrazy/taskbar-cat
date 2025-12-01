@@ -25,3 +25,5 @@ Windows 11
 
 Taskbar NOT set to auto-hide
 
+## About
+Support me [here](https://kattcrazy.nz/product/support-me/)
