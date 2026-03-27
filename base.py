@@ -425,6 +425,9 @@ class TaskbarCatOverlay:
         self._tray_monitor_combo.setCurrentIndex(0 if self.monitor_mode == "primary" else 1)
         self._tray_startup_checkbox.setChecked(is_startup_enabled())
 
+        if getattr(self, "_tray_monitor_row", None) is not None:
+            self._tray_monitor_row.setVisible(len(self.app.screens()) > 1)
+
         self._tray_y_spin.blockSignals(False)
         self._tray_x_spin.blockSignals(False)
         self._tray_size_spin.blockSignals(False)
@@ -793,13 +796,19 @@ class TaskbarCatOverlay:
         size_row.addWidget(self._tray_size_spin)
         root.addLayout(size_row)
 
-        # Row: monitor mode
-        root.addWidget(QLabel("Monitor mode"))
+        # Row: monitor mode (hidden when only one display is connected)
+        self._tray_monitor_row = QWidget()
+        monitor_col = QVBoxLayout(self._tray_monitor_row)
+        monitor_col.setContentsMargins(0, 0, 0, 0)
+        monitor_col.setSpacing(4)
+        monitor_col.addWidget(QLabel("Monitor mode"))
         self._tray_monitor_combo = QComboBox()
         self._tray_monitor_combo.addItem("Primary monitor only", "primary")
         self._tray_monitor_combo.addItem("All monitors", "all")
         self._tray_monitor_combo.setCurrentIndex(0 if self.monitor_mode == "primary" else 1)
-        root.addWidget(self._tray_monitor_combo)
+        monitor_col.addWidget(self._tray_monitor_combo)
+        self._tray_monitor_row.setVisible(len(self.app.screens()) > 1)
+        root.addWidget(self._tray_monitor_row)
 
         # Row: start on boot | quit
         row_actions = QHBoxLayout()
