@@ -10,6 +10,7 @@ And now, just over a year later, I release Taskbar Cat for Windows. A small (or 
 
 - Change the size of the cat
 - Change the vertical and horizontal positions
+- Choose monitor mode: primary monitor only or all monitors
 - Auto start on boot (if enabled)
 - Portable app behavior (no installer/uninstaller required)
 

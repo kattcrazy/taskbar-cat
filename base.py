@@ -5,7 +5,7 @@ import winreg
 import json
 import logging
 from PyQt6 import QtCore
-from PyQt6.QtWidgets import QApplication, QLabel, QSystemTrayIcon, QMenu, QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QSpinBox, QPushButton
+from PyQt6.QtWidgets import QApplication, QLabel, QSystemTrayIcon, QMenu, QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QSpinBox, QPushButton, QComboBox
 from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtCore import Qt
 
@@ -106,7 +106,8 @@ def load_settings():
     default_settings = {
         "size": 150,
         "y_offset": 15,
-        "x_offset": -10
+        "x_offset": -10,
+        "monitor_mode": "primary"
     }
     
     if os.path.exists(settings_path):
@@ -121,6 +122,8 @@ def load_settings():
                     result["y_offset"] = settings["y_offset"]
                 if "x_offset" in settings and -500 <= settings["x_offset"] <= 500:
                     result["x_offset"] = settings["x_offset"]
+                if settings.get("monitor_mode") in ("primary", "all"):
+                    result["monitor_mode"] = settings["monitor_mode"]
                 return result
         except Exception as e:
             logger.exception("Error loading settings: %s", e)
@@ -128,7 +131,7 @@ def load_settings():
     
     return default_settings
 
-def save_settings(size, y_offset, x_offset):
+def save_settings(size, y_offset, x_offset, monitor_mode):
     """Save settings to file (skips if -testing flag is set)"""
     # Check for testing flag
     if "-testing" in sys.argv or "--testing" in sys.argv:
@@ -138,7 +141,8 @@ def save_settings(size, y_offset, x_offset):
     settings = {
         "size": size,
         "y_offset": y_offset,
-        "x_offset": x_offset
+        "x_offset": x_offset,
+        "monitor_mode": monitor_mode
     }
     
     try:
@@ -204,10 +208,10 @@ def remove_from_startup():
 class TaskbarCatOverlay:
     def __init__(self, app):
         self.app = app
-        self.current_pose = None
-        self.last_change_time = 0
         self.pose_images = {}
         self.pose_source_images = {}
+        self.labels = []
+        self.label_states = {}
         
         # Direction thresholds (in pixels)
         self.H_STRONG_THRESHOLD = 100
@@ -226,13 +230,14 @@ class TaskbarCatOverlay:
         # Position offsets (positive = lower/right on screen)
         self.y_offset = settings["y_offset"]
         self.x_offset = settings["x_offset"]
+        self.monitor_mode = settings["monitor_mode"]
         
         # Anchor point relative to image (head is in top middle third)
         # x = width/2 (center), y = height/3 (top third)
         self.anchor_x_ratio = 0.5
         self.anchor_y_ratio = 0.33
         
-        self.setup_window()
+        self.setup_windows()
         self.load_images()
         self.setup_timer()
         
@@ -247,28 +252,43 @@ class TaskbarCatOverlay:
         
         self.setup_system_tray()
     
-    def setup_window(self):
-        self.label = QLabel()
-        self.label.setWindowFlags(
+    def get_target_screens(self):
+        """Get the target screens based on monitor mode."""
+        if self.monitor_mode == "all":
+            return self.app.screens()
+        return [self.app.primaryScreen()]
+
+    def create_cat_label(self):
+        label = QLabel()
+        label.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
-        self.label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
-        # Position above taskbar, near clock (bottom-right)
-        screen = self.app.primaryScreen().availableGeometry()
-        self.label.resize(self.cat_size)
-        x = screen.width() - self.cat_size.width() + self.x_offset
-        y = screen.height() - self.cat_size.height() + self.y_offset
-        self.label.move(x, y)
-        
-        self.label.show()
-        
-        # Apply click-through after window shows
+        label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        label.resize(self.cat_size)
+        label.show()
         self.app.processEvents()
-        self.hwnd = int(self.label.winId())
-        make_click_through(self.hwnd)
+        make_click_through(int(label.winId()))
+        return label
+
+    def setup_windows(self):
+        """Create one cat window per target monitor."""
+        for label in self.labels:
+            label.close()
+
+        self.labels = []
+        self.label_states = {}
+
+        for _screen in self.get_target_screens():
+            label = self.create_cat_label()
+            self.labels.append(label)
+            self.label_states[id(label)] = {
+                "current_pose": None,
+                "last_change_time": 0
+            }
+
+        self.update_cat_position()
     
     def load_images(self):
         # Get the images directory (works for both dev and bundled exe)
@@ -294,12 +314,15 @@ class TaskbarCatOverlay:
         self.rebuild_scaled_pose_images()
         
         # Set initial pose (prefer forward, fallback to first available)
+        initial_pose = None
         if "forward" in self.pose_images:
-            self.set_pose("forward")
+            initial_pose = "forward"
         elif len(self.pose_images) > 0:
-            first_pose = list(self.pose_images.keys())[0]
-            self.set_pose(first_pose)
-            logger.info("Using %s as initial pose", first_pose)
+            initial_pose = list(self.pose_images.keys())[0]
+            logger.info("Using %s as initial pose", initial_pose)
+
+        if initial_pose:
+            self.set_pose_for_all(initial_pose)
 
     def rebuild_scaled_pose_images(self):
         """Rebuild scaled images from in-memory originals."""
@@ -311,17 +334,27 @@ class TaskbarCatOverlay:
                 Qt.TransformationMode.SmoothTransformation
             )
     
-    def set_pose(self, pose_name):
-        if pose_name == self.current_pose:
+    def set_pose_for_label(self, label, pose_name, current_time=None):
+        if pose_name not in self.pose_images:
             return
-        
-        if pose_name in self.pose_images:
-            self.label.setPixmap(self.pose_images[pose_name])
-            self.current_pose = pose_name
-            self.last_change_time = QtCore.QDateTime.currentMSecsSinceEpoch()
+
+        state = self.label_states.get(id(label))
+        if not state:
+            return
+
+        if pose_name == state["current_pose"]:
+            return
+
+        label.setPixmap(self.pose_images[pose_name])
+        state["current_pose"] = pose_name
+        state["last_change_time"] = current_time if current_time is not None else QtCore.QDateTime.currentMSecsSinceEpoch()
+
+    def set_pose_for_all(self, pose_name):
+        for label in self.labels:
+            self.set_pose_for_label(label, pose_name)
     
-    def get_cat_anchor_point(self):
-        rect = self.label.geometry()
+    def get_cat_anchor_point(self, label):
+        rect = label.geometry()
         anchor_x = rect.x() + int(rect.width() * self.anchor_x_ratio)
         anchor_y = rect.y() + int(rect.height() * self.anchor_y_ratio)
         return anchor_x, anchor_y
@@ -478,29 +511,31 @@ class TaskbarCatOverlay:
         # Get mouse position
         mouse_x, mouse_y = get_global_mouse_pos()
         current_time = QtCore.QDateTime.currentMSecsSinceEpoch()
-        
-        # Get cat anchor point
-        cat_x, cat_y = self.get_cat_anchor_point()
-        
-        # Calculate relative position
-        dx = mouse_x - cat_x
-        dy = mouse_y - cat_y
-        
-        # Determine direction
-        h_dir, h_intensity, v_dir, v_intensity = self.determine_direction(dx, dy)
-        
-        # Find best available pose
-        target_pose = self.find_best_pose(h_dir, h_intensity, v_dir, v_intensity)
-        
-        if target_pose is None:
-            return  # No poses available
-        
-        # Check cooldown
-        time_since_last_change = current_time - self.last_change_time
-        
-        if target_pose != self.current_pose:
-            if time_since_last_change >= self.POSE_CHANGE_COOLDOWN_MS:
-                self.set_pose(target_pose)
+
+        for label in self.labels:
+            # Get cat anchor point
+            cat_x, cat_y = self.get_cat_anchor_point(label)
+            
+            # Calculate relative position
+            dx = mouse_x - cat_x
+            dy = mouse_y - cat_y
+            
+            # Determine direction
+            h_dir, h_intensity, v_dir, v_intensity = self.determine_direction(dx, dy)
+            
+            # Find best available pose
+            target_pose = self.find_best_pose(h_dir, h_intensity, v_dir, v_intensity)
+            if target_pose is None:
+                continue
+
+            state = self.label_states.get(id(label))
+            if not state:
+                continue
+
+            if target_pose != state["current_pose"]:
+                time_since_last_change = current_time - state["last_change_time"]
+                if time_since_last_change >= self.POSE_CHANGE_COOLDOWN_MS:
+                    self.set_pose_for_label(label, target_pose, current_time=current_time)
     
     def setup_timer(self):
         self.timer = QtCore.QTimer()
@@ -555,19 +590,30 @@ class TaskbarCatOverlay:
     
     def update_cat_position(self):
         """Update cat window position and size based on current settings"""
-        screen = self.app.primaryScreen().availableGeometry()
-        self.label.resize(self.cat_size)
-        x = screen.width() - self.cat_size.width() + self.x_offset
-        y = screen.height() - self.cat_size.height() + self.y_offset
-        self.label.move(x, y)
+        screens = self.get_target_screens()
+        if len(self.labels) != len(screens):
+            self.setup_windows()
+            return
+
+        for label, screen in zip(self.labels, screens):
+            geometry = screen.availableGeometry()
+            label.resize(self.cat_size)
+            x = geometry.x() + geometry.width() - self.cat_size.width() + self.x_offset
+            y = geometry.y() + geometry.height() - self.cat_size.height() + self.y_offset
+            label.move(x, y)
         
         # Resize all images if size changed
-        current_pose = self.current_pose
+        current_poses = {
+            id(label): self.label_states.get(id(label), {}).get("current_pose")
+            for label in self.labels
+        }
         self.rebuild_scaled_pose_images()
         
         # Update current pose display
-        if current_pose and current_pose in self.pose_images:
-            self.label.setPixmap(self.pose_images[current_pose])
+        for label in self.labels:
+            pose = current_poses.get(id(label))
+            if pose and pose in self.pose_images:
+                label.setPixmap(self.pose_images[pose])
     
     def show_position_dialog(self):
         """Show dialog to adjust position and size with live preview"""
@@ -585,6 +631,7 @@ class TaskbarCatOverlay:
         original_y_offset = self.y_offset
         original_x_offset = self.x_offset
         original_size = self.cat_size.width()
+        original_monitor_mode = self.monitor_mode
         
         # Size control
         size_layout = QHBoxLayout()
@@ -618,6 +665,17 @@ class TaskbarCatOverlay:
         x_layout.addWidget(x_label)
         x_layout.addWidget(x_spinbox)
         layout.addLayout(x_layout)
+
+        # Monitor mode control
+        monitor_layout = QHBoxLayout()
+        monitor_label = QLabel("Monitor Mode:")
+        monitor_combo = QComboBox()
+        monitor_combo.addItem("Primary monitor only", "primary")
+        monitor_combo.addItem("All monitors", "all")
+        monitor_combo.setCurrentIndex(0 if self.monitor_mode == "primary" else 1)
+        monitor_layout.addWidget(monitor_label)
+        monitor_layout.addWidget(monitor_combo)
+        layout.addLayout(monitor_layout)
         
         # Live update functions
         def update_size(value):
@@ -631,11 +689,20 @@ class TaskbarCatOverlay:
         def update_x_offset(value):
             self.x_offset = value
             self.update_cat_position()
+
+        def update_monitor_mode(_index):
+            selected_mode = monitor_combo.currentData()
+            if selected_mode != self.monitor_mode:
+                self.monitor_mode = selected_mode
+                self.setup_windows()
+                # Keep currently rendered pose after recreating labels.
+                self.update_cat_position()
         
         # Connect to live updates
         size_spinbox.valueChanged.connect(update_size)
         y_spinbox.valueChanged.connect(update_y_offset)
         x_spinbox.valueChanged.connect(update_x_offset)
+        monitor_combo.currentIndexChanged.connect(update_monitor_mode)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -644,7 +711,7 @@ class TaskbarCatOverlay:
         
         def on_ok():
             # Save settings before closing
-            save_settings(self.cat_size.width(), self.y_offset, self.x_offset)
+            save_settings(self.cat_size.width(), self.y_offset, self.x_offset, self.monitor_mode)
             dialog.accept()
         
         def on_cancel():
@@ -652,6 +719,8 @@ class TaskbarCatOverlay:
             self.y_offset = original_y_offset
             self.x_offset = original_x_offset
             self.cat_size = QtCore.QSize(original_size, original_size)
+            self.monitor_mode = original_monitor_mode
+            self.setup_windows()
             self.update_cat_position()
             dialog.reject()
         
@@ -691,7 +760,7 @@ class TaskbarCatOverlay:
     
     def quit_application(self):
         # Save settings before quitting
-        save_settings(self.cat_size.width(), self.y_offset, self.x_offset)
+        save_settings(self.cat_size.width(), self.y_offset, self.x_offset, self.monitor_mode)
         self.timer.stop()
         self.app.quit()
 
