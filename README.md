@@ -6,6 +6,7 @@ It was inspired by [RunCat 365](https://github.com/Kyome22/RunCat365), a program
 
 And now, just over a year later, I release Taskbar Cat for Windows. A small (or large, if you change the size) silhouetted cat that sits on top of your taskbar and watches you study, relax, or work.
 
+
 ![Taskbar Cat](docs/1.gif) ![Taskbar Cat](docs/2.png)
 
 ## Configuration
@@ -16,7 +17,7 @@ And now, just over a year later, I release Taskbar Cat for Windows. A small (or 
 | Vertical offset | 15 px |
 | Horizontal offset | −10 px |
 | Monitor mode | Primary monitor only |
-| Autostart | Off (not added to Windows startup until you enable it) |
+| Autostart | Off |
 
 Settings are saved as YAML under your Windows profile at  `%APPDATA%\TaskbarCat\config.yaml`
 
