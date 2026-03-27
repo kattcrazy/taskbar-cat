@@ -32,15 +32,17 @@ from PyQt6.QtCore import Qt
 # Tray / embedded menu theme: #9170ED #80A9F5 #C3D4DB white black
 TRAY_MENU_QSS = """
 QMenu {
-    background-color: #C3D4DB;
+    background-color: #ffffff;
     color: #000000;
-    border: 2px solid #9170ED;
-    padding: 4px;
+    border: 1px solid #9170ED;
+    border-radius: 16px;
+    padding: 6px;
 }
 QFrame#trayPanel {
-    background-color: #C3D4DB;
+    background-color: #ffffff;
     color: #000000;
     border: none;
+    border-radius: 16px;
 }
 QLabel {
     color: #000000;
@@ -49,25 +51,45 @@ QLabel {
 QSpinBox, QComboBox {
     background-color: #ffffff;
     color: #000000;
-    border: 1px solid #80A9F5;
-    border-radius: 3px;
-    padding: 3px 6px;
-    min-height: 22px;
+    border: 1px solid #C3D4DB;
+    border-radius: 16px;
+    padding: 6px 12px;
+    padding-right: 24px;
+    min-height: 24px;
     selection-background-color: #9170ED;
     selection-color: #ffffff;
 }
 QSpinBox:focus, QComboBox:focus {
     border: 1px solid #9170ED;
 }
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 14px;
+    border: none;
+    background: transparent;
+    margin: 0px;
+    padding: 0px;
+}
+QSpinBox::up-button {
+    subcontrol-position: top right;
+}
+QSpinBox::down-button {
+    subcontrol-position: bottom right;
+}
+QSpinBox::up-arrow, QSpinBox::down-arrow {
+    width: 8px;
+    height: 8px;
+}
 QCheckBox {
     color: #000000;
-    spacing: 8px;
+    spacing: 10px;
+    font-weight: 500;
 }
 QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border: 1px solid #9170ED;
-    border-radius: 3px;
+    width: 42px;
+    height: 24px;
+    border: 1px solid #C3D4DB;
+    border-radius: 12px;
     background: #ffffff;
 }
 QCheckBox::indicator:checked {
@@ -78,13 +100,13 @@ QPushButton#trayQuit {
     background-color: #ffffff;
     color: #000000;
     border: 1px solid #9170ED;
-    border-radius: 4px;
+    border-radius: 16px;
     padding: 6px 14px;
     min-width: 72px;
 }
 QPushButton#trayQuit:hover {
-    background-color: #9170ED;
-    color: #ffffff;
+    background-color: #80A9F5;
+    color: #000000;
 }
 """
 

@@ -33,15 +33,7 @@ jobs:
       - name: Build EXE with PyInstaller
         run: pyinstaller taskbar_cat.spec
 
-      - name: Generate SHA256 checksum
-        shell: pwsh
-        run: |
-          $hash = Get-FileHash -Algorithm SHA256 "dist/TaskbarCat.exe"
-          "$($hash.Hash)  TaskbarCat.exe" | Out-File -Encoding ascii "dist/TaskbarCat.exe.sha256"
-
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/TaskbarCat.exe
-            dist/TaskbarCat.exe.sha256
+          files: dist/TaskbarCat.exe
