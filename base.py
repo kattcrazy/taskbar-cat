@@ -1,9 +1,9 @@
 import sys
 import ctypes
 import os
-import subprocess
 import winreg
 import json
+import logging
 from PyQt6 import QtCore
 from PyQt6.QtWidgets import QApplication, QLabel, QSystemTrayIcon, QMenu, QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QSpinBox, QPushButton
 from PyQt6.QtGui import QPixmap, QIcon
@@ -21,6 +21,30 @@ SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_SHOWWINDOW = 0x0040
 SWP_NOACTIVATE = 0x0010
+
+logger = logging.getLogger("taskbar_cat")
+
+
+def configure_logging():
+    """Configure logging to a local file and console fallback."""
+    if logger.handlers:
+        return
+
+    logger.setLevel(logging.INFO)
+    log_path = os.path.join(os.path.dirname(get_settings_path()), "taskbar_cat.log")
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    try:
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except OSError:
+        # If file logging is unavailable, keep console logging so errors are visible.
+        pass
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
 
 def make_click_through(hwnd):
     style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
@@ -99,7 +123,7 @@ def load_settings():
                     result["x_offset"] = settings["x_offset"]
                 return result
         except Exception as e:
-            print(f"Error loading settings: {e}")
+            logger.exception("Error loading settings: %s", e)
             return default_settings
     
     return default_settings
@@ -121,7 +145,7 @@ def save_settings(size, y_offset, x_offset):
         with open(settings_path, 'w') as f:
             json.dump(settings, f, indent=2)
     except Exception as e:
-        print(f"Error saving settings: {e}")
+        logger.exception("Error saving settings: %s", e)
 
 def get_startup_registry_key():
     """Get the registry key for startup programs"""
@@ -159,7 +183,7 @@ def add_to_startup(exe_path):
         winreg.CloseKey(key)
         return True
     except Exception as e:
-        print(f"Error adding to startup: {e}")
+        logger.exception("Error adding to startup: %s", e)
         return False
 
 def remove_from_startup():
@@ -173,7 +197,7 @@ def remove_from_startup():
         # Already removed, that's fine
         return True
     except Exception as e:
-        print(f"Error removing from startup: {e}")
+        logger.exception("Error removing from startup: %s", e)
         return False
 
 
@@ -183,6 +207,7 @@ class TaskbarCatOverlay:
         self.current_pose = None
         self.last_change_time = 0
         self.pose_images = {}
+        self.pose_source_images = {}
         
         # Direction thresholds (in pixels)
         self.H_STRONG_THRESHOLD = 100
@@ -213,9 +238,12 @@ class TaskbarCatOverlay:
         
         # Get exe path for startup management
         if getattr(sys, 'frozen', False):
-            self.exe_path = sys.executable
+            self.startup_command = f'"{sys.executable}"'
         else:
-            self.exe_path = os.path.abspath(__file__)
+            pythonw_path = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            python_exec = pythonw_path if os.path.exists(pythonw_path) else sys.executable
+            script_path = os.path.abspath(__file__)
+            self.startup_command = f'"{python_exec}" "{script_path}"'
         
         self.setup_system_tray()
     
@@ -256,13 +284,14 @@ class TaskbarCatOverlay:
                     pose_name = filename[:-4]  # Remove .png
                     
                     pixmap = QPixmap(image_path)
-                    scaled_pixmap = pixmap.scaled(
-                        self.cat_size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    self.pose_images[pose_name] = scaled_pixmap
-                    print(f"Loaded pose: {pose_name}")
+                    if pixmap.isNull():
+                        logger.warning("Skipping invalid image: %s", image_path)
+                        continue
+
+                    self.pose_source_images[pose_name] = pixmap
+                    logger.info("Loaded pose: %s", pose_name)
+
+        self.rebuild_scaled_pose_images()
         
         # Set initial pose (prefer forward, fallback to first available)
         if "forward" in self.pose_images:
@@ -270,7 +299,17 @@ class TaskbarCatOverlay:
         elif len(self.pose_images) > 0:
             first_pose = list(self.pose_images.keys())[0]
             self.set_pose(first_pose)
-            print(f"Using {first_pose} as initial pose")
+            logger.info("Using %s as initial pose", first_pose)
+
+    def rebuild_scaled_pose_images(self):
+        """Rebuild scaled images from in-memory originals."""
+        self.pose_images.clear()
+        for pose_name, pixmap in self.pose_source_images.items():
+            self.pose_images[pose_name] = pixmap.scaled(
+                self.cat_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
     
     def set_pose(self, pose_name):
         if pose_name == self.current_pose:
@@ -470,7 +509,7 @@ class TaskbarCatOverlay:
     
     def setup_system_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
-            print("System tray is not available")
+            logger.warning("System tray is not available")
             return
         
         # Create system tray icon
@@ -509,9 +548,6 @@ class TaskbarCatOverlay:
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(self.quit_application)
-        menu.addSeparator()
-        uninstall_action = menu.addAction("Uninstall")
-        uninstall_action.triggered.connect(self.uninstall_application)
         
         self.tray_icon.setContextMenu(menu)
         self.tray_icon.setToolTip("Taskbar Cat - Right-click to quit")
@@ -527,18 +563,7 @@ class TaskbarCatOverlay:
         
         # Resize all images if size changed
         current_pose = self.current_pose
-        images_dir = get_resource_path("images")
-        for pose_name in list(self.pose_images.keys()):
-            pose_file = f"{pose_name}.png"
-            image_path = os.path.join(images_dir, pose_file)
-            if os.path.exists(image_path):
-                pixmap = QPixmap(image_path)
-                scaled_pixmap = pixmap.scaled(
-                    self.cat_size,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                self.pose_images[pose_name] = scaled_pixmap
+        self.rebuild_scaled_pose_images()
         
         # Update current pose display
         if current_pose and current_pose in self.pose_images:
@@ -643,7 +668,7 @@ class TaskbarCatOverlay:
         """Toggle start on boot option"""
         if checked:
             # Add to startup
-            if add_to_startup(self.exe_path):
+            if add_to_startup(self.startup_command):
                 self.startup_action.setChecked(True)
             else:
                 self.startup_action.setChecked(False)
@@ -669,47 +694,10 @@ class TaskbarCatOverlay:
         save_settings(self.cat_size.width(), self.y_offset, self.x_offset)
         self.timer.stop()
         self.app.quit()
-    
-    def uninstall_application(self):
-        """Uninstall the application - creates a batch script to delete the exe after closing"""
-        # Remove from startup first
-        remove_from_startup()
-        
-        # Get the path to the current executable
-        if getattr(sys, 'frozen', False):
-            # Running as bundled exe
-            exe_path = sys.executable
-        else:
-            # Running as script
-            exe_path = os.path.abspath(__file__)
-        
-        exe_dir = os.path.dirname(exe_path)
-        
-        # Get settings file path
-        settings_path = get_settings_path()
-        
-        # Create a batch script to delete the exe and settings file after this process closes
-        batch_script = os.path.join(exe_dir, "uninstall_taskbar_cat.bat")
-        
-        with open(batch_script, 'w') as f:
-            f.write("@echo off\n")
-            f.write("timeout /t 2 /nobreak >nul\n")  # Wait 2 seconds for app to close
-            f.write(f'del /f /q "{exe_path}"\n')
-            f.write(f'del /f /q "{settings_path}"\n')  # Delete settings file
-            f.write(f'del /f /q "{batch_script}"\n')  # Delete itself
-            f.write("exit\n")
-        
-        # Quit the application
-        self.timer.stop()
-        
-        # Start the batch script (will run after this process exits)
-        subprocess.Popen(['cmd.exe', '/c', batch_script], shell=False, creationflags=subprocess.CREATE_NO_WINDOW)
-        
-        # Small delay to ensure batch script is started, then quit
-        QtCore.QTimer.singleShot(100, self.app.quit)
 
 
 def main():
+    configure_logging()
     app = QApplication(sys.argv)
     
     # Ensure app doesn't exit when window is closed (since it's click-through anyway)
@@ -717,7 +705,7 @@ def main():
     
     # Check if system tray is available
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        print("Warning: System tray is not available. You may need to use Task Manager to quit.")
+        logger.warning("System tray is not available. You may need to use Task Manager to quit.")
     
     cat_overlay = TaskbarCatOverlay(app)
     sys.exit(app.exec())
