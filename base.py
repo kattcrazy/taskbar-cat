@@ -2,12 +2,91 @@ import sys
 import ctypes
 import os
 import winreg
-import json
 import logging
+import json
+
+import yaml
+
 from PyQt6 import QtCore
-from PyQt6.QtWidgets import QApplication, QLabel, QSystemTrayIcon, QMenu, QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QSpinBox, QPushButton, QComboBox
+from PyQt6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QSystemTrayIcon,
+    QMenu,
+    QMessageBox,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSpinBox,
+    QPushButton,
+    QComboBox,
+    QWidget,
+    QWidgetAction,
+    QFrame,
+    QAbstractSpinBox,
+    QCheckBox,
+    QSizePolicy,
+)
 from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtCore import Qt
+
+# Tray / embedded menu theme: #9170ED #80A9F5 #C3D4DB white black
+TRAY_MENU_QSS = """
+QMenu {
+    background-color: #C3D4DB;
+    color: #000000;
+    border: 2px solid #9170ED;
+    padding: 4px;
+}
+QFrame#trayPanel {
+    background-color: #C3D4DB;
+    color: #000000;
+    border: none;
+}
+QLabel {
+    color: #000000;
+    background: transparent;
+}
+QSpinBox, QComboBox {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #80A9F5;
+    border-radius: 3px;
+    padding: 3px 6px;
+    min-height: 22px;
+    selection-background-color: #9170ED;
+    selection-color: #ffffff;
+}
+QSpinBox:focus, QComboBox:focus {
+    border: 1px solid #9170ED;
+}
+QCheckBox {
+    color: #000000;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #9170ED;
+    border-radius: 3px;
+    background: #ffffff;
+}
+QCheckBox::indicator:checked {
+    background: #9170ED;
+    border: 1px solid #9170ED;
+}
+QPushButton#trayQuit {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #9170ED;
+    border-radius: 4px;
+    padding: 6px 14px;
+    min-width: 72px;
+}
+QPushButton#trayQuit:hover {
+    background-color: #9170ED;
+    color: #ffffff;
+}
+"""
 
 # Make window click-through
 WS_EX_TRANSPARENT = 0x20
@@ -25,13 +104,45 @@ SWP_NOACTIVATE = 0x0010
 logger = logging.getLogger("taskbar_cat")
 
 
+def get_config_dir():
+    """%APPDATA%\\TaskbarCat (Roaming)."""
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        appdata = os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+    return os.path.join(appdata, "TaskbarCat")
+
+
+def ensure_config_dir():
+    d = get_config_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def get_config_yaml_path():
+    return os.path.join(get_config_dir(), "config.yaml")
+
+
+def get_log_path():
+    return os.path.join(get_config_dir(), "taskbar_cat.log")
+
+
+def get_legacy_settings_json_path():
+    """Previous portable JSON next to exe/script (migrated once)."""
+    if getattr(sys, "frozen", False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, "taskbar_cat_settings.json")
+
+
 def configure_logging():
     """Configure logging to a local file and console fallback."""
     if logger.handlers:
         return
 
     logger.setLevel(logging.INFO)
-    log_path = os.path.join(os.path.dirname(get_settings_path()), "taskbar_cat.log")
+    ensure_config_dir()
+    log_path = get_log_path()
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
     try:
@@ -89,65 +200,92 @@ def get_resource_path(relative_path):
     
     return os.path.join(base_path, relative_path)
 
-def get_settings_path():
-    """Get path to settings file (in same directory as exe/script)"""
-    if getattr(sys, 'frozen', False):
-        # Running as bundled exe
-        base_path = os.path.dirname(sys.executable)
-    else:
-        # Running as script
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    return os.path.join(base_path, "taskbar_cat_settings.json")
-
-def load_settings():
-    """Load saved settings from file"""
-    settings_path = get_settings_path()
+def _merge_validated_settings(raw):
+    """Merge dict into validated defaults."""
     default_settings = {
         "size": 150,
         "y_offset": 15,
         "x_offset": -10,
-        "monitor_mode": "primary"
+        "monitor_mode": "primary",
     }
-    
-    if os.path.exists(settings_path):
+    if not isinstance(raw, dict):
+        return default_settings
+    result = default_settings.copy()
+    try:
+        if "size" in raw and 50 <= int(raw["size"]) <= 500:
+            result["size"] = int(raw["size"])
+        if "y_offset" in raw and -200 <= int(raw["y_offset"]) <= 200:
+            result["y_offset"] = int(raw["y_offset"])
+        if "x_offset" in raw and -500 <= int(raw["x_offset"]) <= 500:
+            result["x_offset"] = int(raw["x_offset"])
+        if raw.get("monitor_mode") in ("primary", "all"):
+            result["monitor_mode"] = raw["monitor_mode"]
+    except (TypeError, ValueError):
+        pass
+    return result
+
+
+def load_settings():
+    """Load settings from %APPDATA%\\TaskbarCat\\config.yaml; migrate legacy JSON once."""
+    default_settings = {
+        "size": 150,
+        "y_offset": 15,
+        "x_offset": -10,
+        "monitor_mode": "primary",
+    }
+
+    yaml_path = get_config_yaml_path()
+    if os.path.exists(yaml_path):
         try:
-            with open(settings_path, 'r') as f:
-                settings = json.load(f)
-                # Validate and merge with defaults
-                result = default_settings.copy()
-                if "size" in settings and 50 <= settings["size"] <= 500:
-                    result["size"] = settings["size"]
-                if "y_offset" in settings and -200 <= settings["y_offset"] <= 200:
-                    result["y_offset"] = settings["y_offset"]
-                if "x_offset" in settings and -500 <= settings["x_offset"] <= 500:
-                    result["x_offset"] = settings["x_offset"]
-                if settings.get("monitor_mode") in ("primary", "all"):
-                    result["monitor_mode"] = settings["monitor_mode"]
-                return result
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            return _merge_validated_settings(data if data is not None else {})
         except Exception as e:
-            logger.exception("Error loading settings: %s", e)
+            logger.exception("Error loading YAML settings: %s", e)
             return default_settings
-    
+
+    legacy = get_legacy_settings_json_path()
+    if os.path.exists(legacy):
+        try:
+            with open(legacy, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            merged = _merge_validated_settings(data)
+            save_settings(
+                merged["size"],
+                merged["y_offset"],
+                merged["x_offset"],
+                merged["monitor_mode"],
+            )
+            return merged
+        except Exception as e:
+            logger.exception("Error migrating legacy JSON settings: %s", e)
+            return default_settings
+
     return default_settings
 
+
 def save_settings(size, y_offset, x_offset, monitor_mode):
-    """Save settings to file (skips if -testing flag is set)"""
-    # Check for testing flag
+    """Save settings to AppData YAML (skips if -testing flag is set)."""
     if "-testing" in sys.argv or "--testing" in sys.argv:
-        return  # Don't save settings in testing mode
-    
-    settings_path = get_settings_path()
+        return
+
+    ensure_config_dir()
     settings = {
-        "size": size,
-        "y_offset": y_offset,
-        "x_offset": x_offset,
-        "monitor_mode": monitor_mode
+        "size": int(size),
+        "y_offset": int(y_offset),
+        "x_offset": int(x_offset),
+        "monitor_mode": monitor_mode,
     }
-    
+
     try:
-        with open(settings_path, 'w') as f:
-            json.dump(settings, f, indent=2)
+        with open(get_config_yaml_path(), "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                settings,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
     except Exception as e:
         logger.exception("Error saving settings: %s", e)
 
@@ -252,6 +390,47 @@ class TaskbarCatOverlay:
         
         self.setup_system_tray()
     
+    @staticmethod
+    def _configure_spin_for_typing(spin):
+        """QSpinBox: arrows + full keyboard editing in line edit."""
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        spin.setKeyboardTracking(True)
+        spin.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        spin.setCorrectionMode(QAbstractSpinBox.CorrectionMode.CorrectToPreviousValue)
+        le = spin.lineEdit()
+        if le is not None:
+            le.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def _persist_config(self):
+        save_settings(
+            self.cat_size.width(),
+            self.y_offset,
+            self.x_offset,
+            self.monitor_mode,
+        )
+
+    def _sync_tray_controls_from_state(self):
+        """Refresh tray widgets when the menu opens."""
+        if not getattr(self, "_tray_y_spin", None):
+            return
+        self._tray_y_spin.blockSignals(True)
+        self._tray_x_spin.blockSignals(True)
+        self._tray_size_spin.blockSignals(True)
+        self._tray_monitor_combo.blockSignals(True)
+        self._tray_startup_checkbox.blockSignals(True)
+
+        self._tray_y_spin.setValue(self.y_offset)
+        self._tray_x_spin.setValue(self.x_offset)
+        self._tray_size_spin.setValue(self.cat_size.width())
+        self._tray_monitor_combo.setCurrentIndex(0 if self.monitor_mode == "primary" else 1)
+        self._tray_startup_checkbox.setChecked(is_startup_enabled())
+
+        self._tray_y_spin.blockSignals(False)
+        self._tray_x_spin.blockSignals(False)
+        self._tray_size_spin.blockSignals(False)
+        self._tray_monitor_combo.blockSignals(False)
+        self._tray_startup_checkbox.blockSignals(False)
+
     def get_target_screens(self):
         """Get the target screens based on monitor mode."""
         if self.monitor_mode == "all":
@@ -546,46 +725,128 @@ class TaskbarCatOverlay:
         if not QSystemTrayIcon.isSystemTrayAvailable():
             logger.warning("System tray is not available")
             return
-        
-        # Create system tray icon
+
         self.tray_icon = QSystemTrayIcon(self.app)
-        
-        # Use icon.ico from images folder, scaled to system tray size (16x16)
+
         icon_path = get_resource_path("images/icon.ico")
         if os.path.exists(icon_path):
             icon_pixmap = QPixmap(icon_path)
-            # Scale to 16x16 for system tray (standard size)
             scaled_icon = icon_pixmap.scaled(
-                16, 16,
+                16,
+                16,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.SmoothTransformation,
             )
             self.tray_icon.setIcon(QIcon(scaled_icon))
         else:
-            # Fallback: create a simple icon
-            self.tray_icon.setIcon(self.app.style().standardIcon(
-                self.app.style().StandardPixmap.SP_ComputerIcon
-            ))
-        
-        # Create context menu
+            self.tray_icon.setIcon(
+                self.app.style().standardIcon(self.app.style().StandardPixmap.SP_ComputerIcon)
+            )
+
         menu = QMenu()
-        
-        # Start on boot option
-        self.startup_action = menu.addAction("Start on boot")
-        self.startup_action.setCheckable(True)
-        self.startup_action.setChecked(is_startup_enabled())
-        self.startup_action.triggered.connect(self.toggle_startup)
-        
-        # Adjust position option
-        position_action = menu.addAction("Adjust Position")
-        position_action.triggered.connect(self.show_position_dialog)
-        
-        menu.addSeparator()
-        quit_action = menu.addAction("Quit")
-        quit_action.triggered.connect(self.quit_application)
-        
+        menu.setStyleSheet(TRAY_MENU_QSS)
+        menu.aboutToShow.connect(self._sync_tray_controls_from_state)
+
+        panel = QFrame()
+        panel.setObjectName("trayPanel")
+        panel.setStyleSheet(TRAY_MENU_QSS)
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
+
+        # Row: vertical offset | horizontal offset
+        row_offsets = QHBoxLayout()
+        col_v = QVBoxLayout()
+        col_h = QVBoxLayout()
+        lbl_v = QLabel("Vertical offset")
+        lbl_h = QLabel("Horizontal offset")
+        self._tray_y_spin = QSpinBox()
+        self._tray_y_spin.setRange(-200, 200)
+        self._tray_y_spin.setValue(self.y_offset)
+        self._tray_y_spin.setSuffix(" px")
+        self._tray_y_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._configure_spin_for_typing(self._tray_y_spin)
+
+        self._tray_x_spin = QSpinBox()
+        self._tray_x_spin.setRange(-500, 500)
+        self._tray_x_spin.setValue(self.x_offset)
+        self._tray_x_spin.setSuffix(" px")
+        self._tray_x_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._configure_spin_for_typing(self._tray_x_spin)
+
+        col_v.addWidget(lbl_v)
+        col_v.addWidget(self._tray_y_spin)
+        col_h.addWidget(lbl_h)
+        col_h.addWidget(self._tray_x_spin)
+        row_offsets.addLayout(col_v, 1)
+        row_offsets.addLayout(col_h, 1)
+        root.addLayout(row_offsets)
+
+        # Row: size
+        size_row = QVBoxLayout()
+        size_row.addWidget(QLabel("Size"))
+        self._tray_size_spin = QSpinBox()
+        self._tray_size_spin.setRange(50, 500)
+        self._tray_size_spin.setValue(self.cat_size.width())
+        self._tray_size_spin.setSuffix(" px")
+        self._configure_spin_for_typing(self._tray_size_spin)
+        size_row.addWidget(self._tray_size_spin)
+        root.addLayout(size_row)
+
+        # Row: monitor mode
+        root.addWidget(QLabel("Monitor mode"))
+        self._tray_monitor_combo = QComboBox()
+        self._tray_monitor_combo.addItem("Primary monitor only", "primary")
+        self._tray_monitor_combo.addItem("All monitors", "all")
+        self._tray_monitor_combo.setCurrentIndex(0 if self.monitor_mode == "primary" else 1)
+        root.addWidget(self._tray_monitor_combo)
+
+        # Row: start on boot | quit
+        row_actions = QHBoxLayout()
+        self._tray_startup_checkbox = QCheckBox("Start on boot")
+        self._tray_startup_checkbox.setChecked(is_startup_enabled())
+        quit_btn = QPushButton("Quit")
+        quit_btn.setObjectName("trayQuit")
+        quit_btn.clicked.connect(self.quit_application)
+        row_actions.addWidget(self._tray_startup_checkbox, 1)
+        row_actions.addWidget(quit_btn, 0, Qt.AlignmentFlag.AlignRight)
+        root.addLayout(row_actions)
+
+        tray_action = QWidgetAction(menu)
+        tray_action.setDefaultWidget(panel)
+        menu.addAction(tray_action)
+
+        def on_y_changed(v):
+            self.y_offset = v
+            self.update_cat_position()
+            self._persist_config()
+
+        def on_x_changed(v):
+            self.x_offset = v
+            self.update_cat_position()
+            self._persist_config()
+
+        def on_size_changed(v):
+            self.cat_size = QtCore.QSize(v, v)
+            self.update_cat_position()
+            self._persist_config()
+
+        def on_monitor_changed(_idx):
+            mode = self._tray_monitor_combo.currentData()
+            if mode != self.monitor_mode:
+                self.monitor_mode = mode
+                self.setup_windows()
+                self.update_cat_position()
+                self._persist_config()
+
+        self._tray_y_spin.valueChanged.connect(on_y_changed)
+        self._tray_x_spin.valueChanged.connect(on_x_changed)
+        self._tray_size_spin.valueChanged.connect(on_size_changed)
+        self._tray_monitor_combo.currentIndexChanged.connect(on_monitor_changed)
+        self._tray_startup_checkbox.toggled.connect(self.toggle_startup)
+
         self.tray_icon.setContextMenu(menu)
-        self.tray_icon.setToolTip("Taskbar Cat - Right-click to quit")
+        self.tray_icon.setToolTip("Taskbar Cat")
         self.tray_icon.show()
     
     def update_cat_position(self):
@@ -615,148 +876,30 @@ class TaskbarCatOverlay:
             if pose and pose in self.pose_images:
                 label.setPixmap(self.pose_images[pose])
     
-    def show_position_dialog(self):
-        """Show dialog to adjust position and size with live preview"""
-        dialog = QDialog()
-        dialog.setWindowTitle("Adjust Cat Position & Size")
-        dialog.setModal(True)
-        
-        layout = QVBoxLayout()
-        
-        # Instructions
-        info_label = QLabel("Adjust settings - changes apply immediately")
-        layout.addWidget(info_label)
-        
-        # Store original values for cancel
-        original_y_offset = self.y_offset
-        original_x_offset = self.x_offset
-        original_size = self.cat_size.width()
-        original_monitor_mode = self.monitor_mode
-        
-        # Size control
-        size_layout = QHBoxLayout()
-        size_label = QLabel("Size:")
-        size_spinbox = QSpinBox()
-        size_spinbox.setRange(50, 500)
-        size_spinbox.setValue(self.cat_size.width())
-        size_spinbox.setSuffix(" px")
-        size_layout.addWidget(size_label)
-        size_layout.addWidget(size_spinbox)
-        layout.addLayout(size_layout)
-        
-        # Vertical offset control
-        y_layout = QHBoxLayout()
-        y_label = QLabel("Vertical Offset:")
-        y_spinbox = QSpinBox()
-        y_spinbox.setRange(-200, 200)
-        y_spinbox.setValue(self.y_offset)
-        y_spinbox.setSuffix(" px")
-        y_layout.addWidget(y_label)
-        y_layout.addWidget(y_spinbox)
-        layout.addLayout(y_layout)
-        
-        # Horizontal offset control
-        x_layout = QHBoxLayout()
-        x_label = QLabel("Horizontal Offset:")
-        x_spinbox = QSpinBox()
-        x_spinbox.setRange(-500, 500)
-        x_spinbox.setValue(self.x_offset)
-        x_spinbox.setSuffix(" px")
-        x_layout.addWidget(x_label)
-        x_layout.addWidget(x_spinbox)
-        layout.addLayout(x_layout)
-
-        # Monitor mode control
-        monitor_layout = QHBoxLayout()
-        monitor_label = QLabel("Monitor Mode:")
-        monitor_combo = QComboBox()
-        monitor_combo.addItem("Primary monitor only", "primary")
-        monitor_combo.addItem("All monitors", "all")
-        monitor_combo.setCurrentIndex(0 if self.monitor_mode == "primary" else 1)
-        monitor_layout.addWidget(monitor_label)
-        monitor_layout.addWidget(monitor_combo)
-        layout.addLayout(monitor_layout)
-        
-        # Live update functions
-        def update_size(value):
-            self.cat_size = QtCore.QSize(value, value)
-            self.update_cat_position()
-        
-        def update_y_offset(value):
-            self.y_offset = value
-            self.update_cat_position()
-        
-        def update_x_offset(value):
-            self.x_offset = value
-            self.update_cat_position()
-
-        def update_monitor_mode(_index):
-            selected_mode = monitor_combo.currentData()
-            if selected_mode != self.monitor_mode:
-                self.monitor_mode = selected_mode
-                self.setup_windows()
-                # Keep currently rendered pose after recreating labels.
-                self.update_cat_position()
-        
-        # Connect to live updates
-        size_spinbox.valueChanged.connect(update_size)
-        y_spinbox.valueChanged.connect(update_y_offset)
-        x_spinbox.valueChanged.connect(update_x_offset)
-        monitor_combo.currentIndexChanged.connect(update_monitor_mode)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        ok_button = QPushButton("OK")
-        cancel_button = QPushButton("Cancel")
-        
-        def on_ok():
-            # Save settings before closing
-            save_settings(self.cat_size.width(), self.y_offset, self.x_offset, self.monitor_mode)
-            dialog.accept()
-        
-        def on_cancel():
-            # Restore original values
-            self.y_offset = original_y_offset
-            self.x_offset = original_x_offset
-            self.cat_size = QtCore.QSize(original_size, original_size)
-            self.monitor_mode = original_monitor_mode
-            self.setup_windows()
-            self.update_cat_position()
-            dialog.reject()
-        
-        ok_button.clicked.connect(on_ok)
-        cancel_button.clicked.connect(on_cancel)
-        button_layout.addWidget(ok_button)
-        button_layout.addWidget(cancel_button)
-        layout.addLayout(button_layout)
-        
-        dialog.setLayout(layout)
-        dialog.exec()
-    
     def toggle_startup(self, checked):
-        """Toggle start on boot option"""
+        """Toggle start on boot (tray checkbox)."""
         if checked:
-            # Add to startup
             if add_to_startup(self.startup_command):
-                self.startup_action.setChecked(True)
-            else:
-                self.startup_action.setChecked(False)
-                QMessageBox.warning(
-                    None,
-                    "Startup Error",
-                    "Failed to add Taskbar Cat to startup.\n\nYou may need to run as administrator."
-                )
+                return
+            self._tray_startup_checkbox.blockSignals(True)
+            self._tray_startup_checkbox.setChecked(False)
+            self._tray_startup_checkbox.blockSignals(False)
+            QMessageBox.warning(
+                None,
+                "Startup Error",
+                "Failed to add Taskbar Cat to startup.\n\nYou may need to run as administrator.",
+            )
         else:
-            # Remove from startup
             if remove_from_startup():
-                self.startup_action.setChecked(False)
-            else:
-                self.startup_action.setChecked(True)
-                QMessageBox.warning(
-                    None,
-                    "Startup Error",
-                    "Failed to remove Taskbar Cat from startup."
-                )
+                return
+            self._tray_startup_checkbox.blockSignals(True)
+            self._tray_startup_checkbox.setChecked(True)
+            self._tray_startup_checkbox.blockSignals(False)
+            QMessageBox.warning(
+                None,
+                "Startup Error",
+                "Failed to remove Taskbar Cat from startup.",
+            )
     
     def quit_application(self):
         # Save settings before quitting

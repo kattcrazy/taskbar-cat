@@ -8,11 +8,20 @@ And now, just over a year later, I release Taskbar Cat for Windows. A small (or 
 
 ## Features
 
-- Change the size of the cat
-- Change the vertical and horizontal positions
-- Choose monitor mode: primary monitor only or all monitors
+- Configure cat size, vertical offset, and horizontal offset from the tray menu (type values or use the arrows)
+- Choose primary monitor only or all monitors
 - Auto start on boot (if enabled)
-- Portable app behavior (no installer/uninstaller required)
+- Portable app (no installer/uninstaller required)
+
+## Configuration
+
+Settings are saved as YAML under your Windows profile:
+
+- `%APPDATA%\TaskbarCat\config.yaml`
+
+The first time you run a newer build, an older `taskbar_cat_settings.json` next to the app (if present) is migrated into that folder.
+
+Logs: `%APPDATA%\TaskbarCat\taskbar_cat.log`
 
 ## Images
 
