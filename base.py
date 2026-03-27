@@ -48,37 +48,29 @@ QLabel {
     color: #000000;
     background: transparent;
 }
-QSpinBox, QComboBox {
+QSpinBox {
     background-color: #ffffff;
     color: #000000;
     border: 1px solid #C3D4DB;
     border-radius: 16px;
     padding: 6px 12px;
-    padding-right: 24px;
+    min-height: 24px;
+    selection-background-color: #9170ED;
+    selection-color: #ffffff;
+}
+QComboBox {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #C3D4DB;
+    border-radius: 16px;
+    padding: 6px 12px;
+    padding-right: 28px;
     min-height: 24px;
     selection-background-color: #9170ED;
     selection-color: #ffffff;
 }
 QSpinBox:focus, QComboBox:focus {
     border: 1px solid #9170ED;
-}
-QSpinBox::up-button, QSpinBox::down-button {
-    subcontrol-origin: border;
-    width: 14px;
-    border: none;
-    background: transparent;
-    margin: 0px;
-    padding: 0px;
-}
-QSpinBox::up-button {
-    subcontrol-position: top right;
-}
-QSpinBox::down-button {
-    subcontrol-position: bottom right;
-}
-QSpinBox::up-arrow, QSpinBox::down-arrow {
-    width: 8px;
-    height: 8px;
 }
 QCheckBox {
     color: #000000;
@@ -107,6 +99,25 @@ QPushButton#trayQuit {
 QPushButton#trayQuit:hover {
     background-color: #80A9F5;
     color: #000000;
+}
+QPushButton#traySave {
+    background-color: #9170ED;
+    color: #ffffff;
+    border: 1px solid #9170ED;
+    border-radius: 16px;
+    padding: 6px 14px;
+    min-width: 72px;
+    font-weight: 600;
+}
+QPushButton#traySave:hover {
+    background-color: #80A9F5;
+    border: 1px solid #80A9F5;
+    color: #000000;
+}
+QPushButton#traySave:pressed {
+    background-color: #6f52c4;
+    border: 1px solid #6f52c4;
+    color: #ffffff;
 }
 """
 
@@ -414,8 +425,8 @@ class TaskbarCatOverlay:
     
     @staticmethod
     def _configure_spin_for_typing(spin):
-        """QSpinBox: arrows + full keyboard editing in line edit."""
-        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        """QSpinBox: no step arrows; keyboard editing in line edit."""
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setKeyboardTracking(True)
         spin.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         spin.setCorrectionMode(QAbstractSpinBox.CorrectionMode.CorrectToPreviousValue)
@@ -430,6 +441,28 @@ class TaskbarCatOverlay:
             self.x_offset,
             self.monitor_mode,
         )
+
+    def _apply_tray_values_and_save(self):
+        """Commit spinbox text, apply monitor mode, update overlay, write YAML."""
+        if not getattr(self, "_tray_y_spin", None):
+            return
+        self._tray_y_spin.interpretText()
+        self._tray_x_spin.interpretText()
+        self._tray_size_spin.interpretText()
+        self.y_offset = self._tray_y_spin.value()
+        self.x_offset = self._tray_x_spin.value()
+        self.cat_size = QtCore.QSize(self._tray_size_spin.value(), self._tray_size_spin.value())
+        mode_changed = False
+        if getattr(self, "_tray_monitor_row", None) is not None and self._tray_monitor_row.isVisible():
+            mode = self._tray_monitor_combo.currentData()
+            if mode != self.monitor_mode:
+                self.monitor_mode = mode
+                mode_changed = True
+        if mode_changed:
+            self.setup_windows()
+        else:
+            self.update_cat_position()
+        self._persist_config()
 
     def _sync_tray_controls_from_state(self):
         """Refresh tray widgets when the menu opens."""
@@ -832,15 +865,19 @@ class TaskbarCatOverlay:
         self._tray_monitor_row.setVisible(len(self.app.screens()) > 1)
         root.addWidget(self._tray_monitor_row)
 
-        # Row: start on boot | quit
+        # Row: start on boot | quit | save
         row_actions = QHBoxLayout()
         self._tray_startup_checkbox = QCheckBox("Start on boot")
         self._tray_startup_checkbox.setChecked(is_startup_enabled())
         quit_btn = QPushButton("Quit")
         quit_btn.setObjectName("trayQuit")
         quit_btn.clicked.connect(self.quit_application)
+        save_btn = QPushButton("Save")
+        save_btn.setObjectName("traySave")
+        save_btn.clicked.connect(self._apply_tray_values_and_save)
         row_actions.addWidget(self._tray_startup_checkbox, 1)
-        row_actions.addWidget(quit_btn, 0, Qt.AlignmentFlag.AlignRight)
+        row_actions.addWidget(quit_btn, 0)
+        row_actions.addWidget(save_btn, 0)
         root.addLayout(row_actions)
 
         tray_action = QWidgetAction(menu)
