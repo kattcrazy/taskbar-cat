@@ -27,11 +27,11 @@ jobs:
 
       - name: Run smoke checks
         run: |
-          python -m py_compile base.py
+          python -m py_compile main.py config.py win32_helpers.py startup.py pose_logic.py tray_styles.py startup_toggle.py overlay.py
           if (!(Test-Path "taskbar_cat.spec")) { throw "Missing taskbar_cat.spec" }
 
       - name: Build EXE with PyInstaller
-        run: pyinstaller taskbar_cat.spec
+        run: python -m PyInstaller taskbar_cat.spec
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

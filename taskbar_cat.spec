@@ -3,7 +3,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['base.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[
