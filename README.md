@@ -19,7 +19,7 @@ And now, just over a year later, I release Taskbar Cat for Windows. A small (or 
 | Monitor mode | Primary monitor only |
 | Autostart | Off |
 
-Settings are written to `%APPDATA%\TaskbarCat\config.yaml` when you click **Save** in the tray menu (live preview while you adjust; Quit does not save).
+Settings are written to `%APPDATA%\TaskbarCat\config.yaml` when you click Save in the tray menu.
 
 ## Requirements
 
