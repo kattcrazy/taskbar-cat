@@ -25,3 +25,8 @@ Settings are written to `%APPDATA%\TaskbarCat\config.yaml` when you click Save i
 
 - Windows 11
 - Taskbar not set to auto-hide
+
+## About
+Contributions/PRs welcome. 
+
+If this app cheers you up, consider supporting me [here](https://kattcrazy.nz/product/support-me/) :)
