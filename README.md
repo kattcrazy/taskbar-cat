@@ -25,6 +25,9 @@ Settings are written to `%APPDATA%\TaskbarCat\config.yaml` when you click Save i
 
 - Windows 11
 - Taskbar not set to auto-hide
+## License
+
+This project uses the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). See [LICENSE](LICENSE) for the full legal text. In short: you can use, change, and share it freely. If you distribute a modified version, you must offer it under the same license and share the source too, so the work (and its derivatives) stay open. You cannot take this code, tweak it, and ship it as a closed product.
 
 ## About
 Contributions/PRs welcome. 
